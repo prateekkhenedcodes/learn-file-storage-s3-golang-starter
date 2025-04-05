@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -31,7 +34,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-
 	// TODO: implement the upload here
 	err = r.ParseMultipartForm(maxMemory)
 	if err != nil {
@@ -46,11 +48,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	defer file.Close()
 	mediaType := fileHeader.Header.Get("Content-Type")
 
-	imageData, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "could not read the file ", err)
-		return
-	}
 	dbMetaData, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "could not get the meta data from the database", err)
@@ -61,14 +58,31 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	videoThumbnails[dbMetaData.ID] = thumbnail{
-		imageData,
-		mediaType,
+	fileExt := strings.Split(mediaType, "/")[1]
+	filePath := fmt.Sprintf("/assets/%v.%v", dbMetaData.ID, fileExt)
+	thumbnailURL := fmt.Sprintf("http://localhost:%v%v", cfg.port, filePath)
+
+	filePathSystem := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", dbMetaData.ID, fileExt))
+	err = os.MkdirAll(cfg.assetsRoot, 0755)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "/assets dir does not exits", err)
 	}
-	thumbnaillink := fmt.Sprintf("http://localhost:%v/api/thumbnails/%v", cfg.port, dbMetaData.ID)
+
+	newFile, err := os.Create(filePathSystem)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not create a file for the thumbnail to store", err)
+		return
+	}
+	defer newFile.Close()
+
+	_, err = io.Copy(newFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not copy the thumbnail to disk", err)
+		return
+	}
 
 	dbMetaData.UpdatedAt = time.Now()
-	dbMetaData.ThumbnailURL = &thumbnaillink
+	dbMetaData.ThumbnailURL = &thumbnailURL
 	err = cfg.db.UpdateVideo(dbMetaData)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "could not update the video", err)
@@ -80,7 +94,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "could not get the video metadata", err)
 		return
 	}
-
 
 	respondWithJSON(w, http.StatusOK, updatedVideoData)
 }
